@@ -38,17 +38,27 @@ enum IHM_STATES
   IHMSTATES_MEASURING,
   IHMSTATES_MODESELECTION,
   IHMSTATES_ENTERDATA, // saisie des paramètres de mode (température ou durée avant extinction)
+  IHMSTATES_OFF
 };
 
-const byte MODESNB = 5; // nb de modes
+const byte MODESNB = 6; // nb de modes
 enum MODE
 {
   MODE_SETTEMP = 0,            // mode de selection de la temp à atteindre
   MODE_SETMAXDURATION_MIN = 1, // mode de selection de la durée avant arrêt
   MODE_SETMAXDURATION_H = 2,   // mode de selection de la durée avant arrêt
-  MODE_RUNNING = 3,            // en cours de mesure
-  MODE_OFF = 4                 // mode arret (pas de reglage de température)
+  MODE_FERMENTATION = 3,       // mode de selection de la durée avant arrêt
+  MODE_RUNNING = 4,            // en cours de mesure
+  MODE_OFF = 5                 // mode arret (pas de reglage de température)
 };
+
+char modesdisplay[MODESNB][16] = {
+    "choix temp",
+    "duree minutes",
+    "duree heures",
+    "setting levain",
+    "GO thermostat",
+    "switch OFF"};
 
 char CurrentIhmState;
 char CurrentMode = MODE_RUNNING;
@@ -57,6 +67,7 @@ const unsigned long BUTTONSELECT_INTERVAL = 800;      // interval entre 2 appui 
 const unsigned long READTEMP_INTERVAL = 1000;         // interval entre 2 prises de temp
 const unsigned long REQUESTTEMP_SHIFT = 800;          //décallage entre demande de lecture envoyée au capteur oneWire et la lecture du registre pour lui laisse le temps de réagire
 const unsigned long HEATSTATESWITCH_INTERVAL = 10000; // interval min entre 2 changement d'états du chauffage
+const unsigned long MENUSELECTION_TIMEOUT = 20000;    // temps avant sortie du menu selection si pas d'action
 bool onewireWaitingForRead = false;
 bool thermostatActivated = false;
 bool timerON = false;
@@ -67,19 +78,13 @@ unsigned long lasttestbutton = 0;
 unsigned long latestreadtemp = 0;
 unsigned long latestSwitchHeater = 0;
 unsigned long lastSelectPush = 0;
+unsigned long lastAnyButtonPush = 0;
 unsigned int maxduration = 60; // durée avant extinction (en minutes)
 unsigned int countdown = 60;
 float current_temp = 0;
 float target_temp = 0;
 char buffstr[16], s_temp[8];
 bool blinkheat = false;
-
-char modesdisplay[MODESNB][14] = {
-    "choix temp",
-    "duree minutes",
-    "duree heures",
-    "thermostat ON",
-    "switch OFF"};
 
 /* Création de l'objet OneWire pour manipuler le bus 1-Wire */
 OneWire ds(BROCHE_ONEWIRE);
@@ -217,9 +222,14 @@ void Buttons_statemachin()
   byte buttonpressed = getPressedButton();
   if (buttonpressed == BUTTON_NONE)
   {
+    if ((CurrentIhmState == IHMSTATES_MODESELECTION || CurrentIhmState == IHMSTATES_ENTERDATA) && currentmillis - lastAnyButtonPush > MENUSELECTION_TIMEOUT)
+    {
+      CurrentIhmState = IHMSTATES_MEASURING; //expiration du menu selection
+    }
     return;
   }
 
+  lastAnyButtonPush = currentmillis;
   //gère la tempo par boutons (uniquement pour le select et right -qui a role de select-)
   // et la sortie du mode veille
   switch (buttonpressed)
@@ -228,14 +238,12 @@ void Buttons_statemachin()
   case BUTTON_RIGHT:
     if (currentmillis - lastSelectPush < BUTTONSELECT_INTERVAL)
       return;
-    else
-    {
-      lastSelectPush = currentmillis;
-      if (CurrentMode == MODE_OFF)
-        SwitchOn();
-    }
+    lastSelectPush = currentmillis;
+    if (CurrentMode == MODE_OFF)
+      SwitchOn();
     break;
   }
+
   // Serial.print("Button ");
   // Serial.print(buttonpressed);
 
@@ -257,12 +265,12 @@ void Buttons_statemachin()
     case BUTTON_UP:
       if (++CurrentMode >= MODESNB)
         CurrentMode = 0;
-      delay(200);
+      delay(150);
       break;
     case BUTTON_DOWN:
       if (--CurrentMode < 0)
         CurrentMode = MODESNB - 1;
-      delay(200);
+      delay(150);
       break;
     case BUTTON_LEFT: // back button
       CurrentMode = MODE_RUNNING;
@@ -272,6 +280,10 @@ void Buttons_statemachin()
     case BUTTON_RIGHT:
       switch (CurrentMode)
       {
+      case MODE_OFF:
+        SwitchOff();
+        return;
+        break;
       case MODE_RUNNING:
         CurrentIhmState = IHMSTATES_MEASURING;
         break;
@@ -284,10 +296,13 @@ void Buttons_statemachin()
       case MODE_SETMAXDURATION_MIN:
         CurrentIhmState = IHMSTATES_ENTERDATA;
         break;
-      case MODE_OFF:
-        SwitchOff();
-        break;
-      default:
+      case MODE_FERMENTATION:
+        target_temp = 24;
+        maxduration = 180;
+        timerON = true;
+        timerstartmillis = currentmillis;
+        thermostatActivated = true;
+        CurrentIhmState = IHMSTATES_MEASURING;
         break;
       }
       break;
@@ -361,15 +376,19 @@ void Buttons_statemachin()
 void SwitchOff()
 {
   CurrentMode = MODE_OFF;
+  CurrentIhmState = IHMSTATES_OFF;
   HeatSwitch(false);
   lcd.clear();
   lcd.noDisplay();
   digitalWrite(10, LOW); //extinction LCD light
+  timerON = false;
+  thermostatActivated = false;
 }
 
 void SwitchOn()
 {
   CurrentMode = MODE_RUNNING;
+  CurrentIhmState = IHMSTATES_MEASURING;
   digitalWrite(10, HIGH); //allumage LCD light
   lcd.display();
 }
@@ -415,13 +434,18 @@ void ManageDisplay()
     {
       countdown = maxduration - (int)floor((currentmillis - timerstartmillis) / 60000);
       if (countdown <= 0)
+      {
         SwitchOff();
+        return;
+      }
       dtostrf(countdown, 4, 0, s_temp);
       sprintf(buffstr, "%smin", s_temp);
       DISPLAYLCD(buffstr, 0, 0);
     }
     if (thermostatActivated)
     {
+      if (!timerON)
+        DISPLAYLCD("          ", 0, 0);
       dtostrf(target_temp, 2, 0, s_temp);
       sprintf(buffstr, "th<%sc", s_temp);
       DISPLAYLCD(buffstr, 0, 10);
@@ -487,7 +511,7 @@ void setup()
   pinMode(HEATRELAY_PIN, OUTPUT);
   pinMode(10, OUTPUT);
   CurrentIhmState = IHMSTATES_MEASURING;
-  CurrentMode = MODE_RUNNING;
+  SwitchOn();
 }
 
 /** Fonction loop() **/
@@ -500,43 +524,40 @@ void loop()
     lasttestbutton = currentmillis;
     Buttons_statemachin();
   }
-  if (CurrentMode != MODE_OFF)
+  //inscript la demande de lecture
+  if (CurrentIhmState == IHMSTATES_MEASURING &&
+      !onewireWaitingForRead &&
+      (currentmillis - latestreadtemp) > READTEMP_INTERVAL)
   {
-    //inscript la demande de lecture
-    if (CurrentIhmState == IHMSTATES_MEASURING &&
-        !onewireWaitingForRead &&
-        (currentmillis - latestreadtemp) > READTEMP_INTERVAL)
+    latestreadtemp = currentmillis;
+    if (requestTemperature(true) != ASK_OK)
     {
-      latestreadtemp = currentmillis;
-      if (requestTemperature(true) != ASK_OK)
-      {
-        DISPLAYLCD("sensor ERROR");
-        Serial.println(F("Erreur de demande de lecture du capteur"));
-        return;
-      }
-      onewireWaitingForRead = true;
+      DISPLAYLCD("sensor ERROR");
+      Serial.println(F("Erreur de demande de lecture du capteur"));
+      return;
     }
+    onewireWaitingForRead = true;
+  }
 
-    if (CurrentIhmState == IHMSTATES_MEASURING &&
-        onewireWaitingForRead &&
-        (currentmillis - latestreadtemp) > REQUESTTEMP_SHIFT)
+  if (CurrentIhmState == IHMSTATES_MEASURING &&
+      onewireWaitingForRead &&
+      (currentmillis - latestreadtemp) > REQUESTTEMP_SHIFT)
+  {
+    onewireWaitingForRead = false;
+    if (ReadTemperature(&current_temp) != READ_OK)
     {
-      onewireWaitingForRead = false;
-      if (ReadTemperature(&current_temp) != READ_OK)
-      {
-        DISPLAYLCD("reading temp ERR");
-        Serial.println(F("Erreur de lecture du capteur"));
-        return;
-      }
-      Serial.print(F("Temperature : "));
-      Serial.print(current_temp, 2);
-      Serial.write(176); // Caractère degré
-      Serial.write('C');
-      Serial.println();
-
-      ManageDisplay();
-
-      ManageHeating();
+      DISPLAYLCD("reading temp ERR");
+      Serial.println(F("Erreur de lecture du capteur"));
+      return;
     }
+    Serial.print(F("Temperature : "));
+    Serial.print(current_temp, 2);
+    Serial.write(176); // Caractère degré
+    Serial.write('C');
+    Serial.println();
+
+    ManageDisplay();
+
+    ManageHeating();
   }
 }
