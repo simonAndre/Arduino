@@ -49,7 +49,7 @@ enum MODE
 };
 
 byte CurrentIhmState;
-int CurrentMode = RUNNING;
+byte CurrentMode = RUNNING;
 const unsigned long BUTTONCHECK_INTERVAL = 200;       // interval entre 2 checks d'état de bouton
 const unsigned long READTEMP_INTERVAL = 1000;         // interval entre 2 prises de temp
 const unsigned long REQUESTTEMP_SHIFT = 800;          //décallage entre demande de lecture envoyée au capteur oneWire et la lecture du registre pour lui laisse le temps de réagire
@@ -62,16 +62,49 @@ unsigned long latestreadtemp = 0;
 unsigned long latestSwitchHeater = 0;
 unsigned long maxduration = 60; // durée de chauffage max (en minutes)
 unsigned long currentmillis;
-float current_temp;
+float current_temp = 0;
 float target_temp = 0;
 
 char modesdisplay[MODESNB][16] = {
-    "choix temp     ",
-    "duree heures   ",
-    "thermostat ON  "};
+    "choix temp",
+    "duree heures",
+    "thermostat ON"};
 
 /* Création de l'objet OneWire pour manipuler le bus 1-Wire */
 OneWire ds(BROCHE_ONEWIRE);
+
+char lcdLineBuf[16];
+uint8_t i;
+uint8_t _DisplayLCD(const char *message, uint8_t line = 0, uint8_t pos = 0, uint8_t size = 16, bool overwrite = true)
+{
+  if (size <= 16)
+  {
+    if (overwrite && pos > 0)
+    {
+      for (i = 0; i < pos; i++)
+      {
+        *(lcdLineBuf + i) = ' ';
+      }
+    }
+    for (i = 0; i < size; i++)
+    {
+      *(lcdLineBuf + pos + i) = message[i];
+    }
+    for (i = pos + size; i < 16; i++)
+    {
+      *(lcdLineBuf + i) = ' ';
+    }
+    lcd.setCursor(0, line);
+    lcd.print(lcdLineBuf);
+    return 1;
+  }
+  return 0;
+}
+
+#define DISPLAYLCD(message, line, pos) _DisplayLCD(message, line, pos, strlen(message), false)
+#define DISPLAYLCD_OVERWRITE(message, line, pos) _DisplayLCD(message, line, pos, strlen(message), true)
+
+
 
 byte requestTemperature(byte reset_search)
 {
@@ -105,6 +138,9 @@ byte requestTemperature(byte reset_search)
     // Mauvais type de capteur
     return INVALID_SENSOR;
   }
+  //Serial.print(F("DS18B20 addr:"));
+  //Serial.print(onewire_addr,8);
+  //Serial.println();
 
   /* Reset le bus 1-Wire et sélectionne le capteur */
   ds.reset();
@@ -170,8 +206,8 @@ void testButton()
   switch (CurrentIhmState)
   {
 
-  case START:
   case MEASURING:
+  case START:
     if (buttonpressed == BUTTON_SELECT)
       CurrentIhmState = MODESELECTION;
     else
@@ -190,7 +226,10 @@ void testButton()
         CurrentMode = RUNNING;
       break;
     case BUTTON_SELECT:
-      CurrentIhmState = ENTERDATA;
+      if (CurrentMode == RUNNING)
+        CurrentIhmState = MEASURING;
+      else
+        CurrentIhmState = ENTERDATA;
       break;
     default:
       return;
@@ -240,17 +279,16 @@ void ManageHeating()
   {
     latestSwitchHeater = currentmillis;
     if (current_temp < target_temp - 1)
-    {
       heatState = HIGH;
-      Serial.println(F("set heat ON"));
-    }
-    else
-    {
-      heatState = LOW;
-      Serial.println(F("set heat OFF"));
-    }
-    digitalWrite(HEATRELAY_PIN, heatState);
+    Serial.println(F("set heat ON"));
   }
+  else
+  {
+    heatState = LOW;
+    Serial.println(F("set heat OFF"));
+  }
+  digitalWrite(HEATRELAY_PIN, heatState);
+}
 }
 
 void ManageDisplay()
@@ -260,51 +298,39 @@ void ManageDisplay()
   case MEASURING:
     char s_temp[5];
     dtostrf(current_temp, 5, 2, s_temp);
-    lcd.setCursor(0, 0);
-    lcd.print("Temp:           ");
+    DISPLAYLCD("Temp:", 0, 0);
     if (thermostatActivated)
     {
-      lcd.setCursor(10, 0);
-      lcd.print("<");
-      lcd.setCursor(11, 0);
+      DISPLAYLCD("<", 0, 10);
+      // lcd.setCursor(10, 0);
+      // lcd.print("<");
+      // lcd.setCursor(11, 0);
       char s_temptarget[2];
       dtostrf(target_temp, 2, 0, s_temptarget);
-      lcd.print(s_temptarget);
+      // lcd.print(s_temptarget);
+      DISPLAYLCD(s_temptarget, 0, 11);
     }
-    lcd.setCursor(0, 1);
-    lcd.print(s_temp);
-    lcd.setCursor(5, 1);
-    lcd.print("           ");
-
+    DISPLAYLCD(s_temp, 1, 0);
     break;
   case MODESELECTION:
-    lcd.setCursor(0, 0);
-    lcd.print("Mode:           ");
-    lcd.setCursor(0, 1);
-    lcd.print(modesdisplay[CurrentMode]);
+    DISPLAYLCD("Mode:", 0, 0);
+    DISPLAYLCD(modesdisplay[CurrentMode], 1, 0);
     break;
   case ENTERDATA:
     switch (CurrentMode)
     {
     case SETTEMP:
-      lcd.setCursor(0, 0);
-      lcd.print("reglage Temp:");
+      DISPLAYLCD("reglage Temp:", 0, 0);
       if (target_temp == 0)
         target_temp = current_temp;
-      lcd.setCursor(0, 1);
       dtostrf(target_temp, 5, 2, s_temp);
-      lcd.print(s_temp);
-      lcd.setCursor(4, 1);
-      lcd.print("            ");
+      DISPLAYLCD(s_temp, 1, 0);
       break;
     case SETMAXDURATION:
-      lcd.print("duree minutes");
+      DISPLAYLCD("duree minutes", 0, 0);
       char s_maxdur[4];
       dtostrf(maxduration, 4, 0, s_maxdur);
-      lcd.setCursor(0, 1);
-      lcd.print(s_maxdur);
-      lcd.setCursor(4, 1);
-      lcd.print("            ");
+      DISPLAYLCD(s_maxdur, 1, 0);
       break;
     default:
       return;
@@ -316,11 +342,23 @@ void ManageDisplay()
 /** Fonction setup() **/
 void setup()
 {
-  CurrentIhmState = START;
+  CurrentIhmState = MEASURING;
   /* Initialisation du port série */
   Serial.begin(115200);
   lcd.begin(16, 2);
-  lcd.print("Hello San:");
+  DISPLAYLCD("Bienvenue", 0, 0);
+  delay(500);
+  DISPLAYLCD("sur", 0, 0);
+  delay(500);
+  DISPLAYLCD("mon", 0, 0);
+  delay(100);
+  DISPLAYLCD_OVERWRITE("mon", 0, 3);
+  delay(100);
+  DISPLAYLCD_OVERWRITE("mon", 0, 7);
+  delay(100);
+  DISPLAYLCD_OVERWRITE("mon", 0, 10);
+  delay(100);
+  DISPLAYLCD_OVERWRITE("THERMOSTAT", 1, 2);
   lasttestbutton = millis();
   pinMode(HEATRELAY_PIN, OUTPUT);
 }
@@ -337,9 +375,9 @@ void loop()
   }
 
   //inscript la demande de lecture
-  if (CurrentIhmState == MEASURING && 
-  !onewireWaitingForRead && 
-  (currentmillis - latestreadtemp) > READTEMP_INTERVAL)
+  if (CurrentIhmState == MEASURING &&
+      !onewireWaitingForRead &&
+      (currentmillis - latestreadtemp) > READTEMP_INTERVAL)
   {
     latestreadtemp = currentmillis;
     if (requestTemperature(true) != ASK_OK)
@@ -350,9 +388,9 @@ void loop()
     onewireWaitingForRead = true;
   }
 
-  if (CurrentIhmState == MEASURING && 
-    onewireWaitingForRead && 
-    (currentmillis - latestreadtemp) > REQUESTTEMP_SHIFT)
+  if (CurrentIhmState == MEASURING &&
+      onewireWaitingForRead &&
+      (currentmillis - latestreadtemp) > REQUESTTEMP_SHIFT)
   {
     onewireWaitingForRead = false;
     if (ReadTemperature(&current_temp) != READ_OK)

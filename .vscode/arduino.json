@@ -1,5 +1,5 @@
 {
     "board": "arduino:avr:uno",
-    "sketch": "Thermostat\\sketch_ThermostatLCD.ino",
+    "sketch": "Thermostat\\sketch_ThermostatLCD\\sketch_ThermostatLCD.ino",
     "port": "COM5"
 }
