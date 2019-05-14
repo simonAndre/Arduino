@@ -101,8 +101,22 @@ uint8_t _DisplayLCD(const char *message, uint8_t line = 0, uint8_t pos = 0, uint
   return 0;
 }
 
-#define DISPLAYLCD(message, line, pos) _DisplayLCD(message, line, pos, strlen(message), false)
+#define DISPLAYLCD_1(message) _DisplayLCD(message, 0, 0, strlen(message), false)
+#define DISPLAYLCD_2(message, line) _DisplayLCD(message, line, 0, strlen(message), false)
+#define DISPLAYLCD_3(message, line, pos) _DisplayLCD(message, line, pos, strlen(message), false)
 #define DISPLAYLCD_OVERWRITE(message, line, pos) _DisplayLCD(message, line, pos, strlen(message), true)
+
+
+#define GET_4TH_ARG(arg1, arg2, arg3, arg4, ...) arg4
+#define DISPLAYLCD_MACRO_CHOOSER(...) \
+    GET_4TH_ARG(__VA_ARGS__, DISPLAYLCD_3, \
+                DISPLAYLCD_2, DISPLAYLCD_1, )
+
+#define DISPLAYLCD(...) DISPLAYLCD_MACRO_CHOOSER(__VA_ARGS__)(__VA_ARGS__)
+
+
+
+
 
 byte requestTemperature(byte reset_search)
 {
@@ -260,8 +274,15 @@ void testButton()
       }
       break;
     case BUTTON_SELECT:
+       switch (CurrentMode)
+      {
+      case SETTEMP:
+        thermostatActivated = true;
+        break;
+      case SETMAXDURATION:
+        break;
+      }
       CurrentIhmState = MEASURING;
-      thermostatActivated = true;
       break;
     default:
       return;
@@ -279,14 +300,18 @@ void ManageHeating()
     if (current_temp < target_temp - 1)
     {
       heatState = HIGH;
-      Serial.println(F("set heat ON"));
+      DISPLAYLCD("set heat ON", 0, 0);
+      delay(1000);
     }
     else
     {
       heatState = LOW;
-      Serial.println(F("set heat OFF"));
+      DISPLAYLCD("set heat OFF", 0, 0);
+      delay(1000);
     }
     digitalWrite(HEATRELAY_PIN, heatState);
+    DISPLAYLCD("OK",1, 0);
+    delay(10000);
   }
 }
 
@@ -345,9 +370,9 @@ void setup()
   /* Initialisation du port série */
   Serial.begin(115200);
   lcd.begin(16, 2);
-  DISPLAYLCD("Bienvenue", 0, 0);
+  DISPLAYLCD("Bienvenue");
   delay(500);
-  DISPLAYLCD("sur", 0, 0);
+  DISPLAYLCD("sur", 1);
   delay(500);
   DISPLAYLCD("mon", 0, 0);
   delay(100);
@@ -381,6 +406,7 @@ void loop()
     latestreadtemp = currentmillis;
     if (requestTemperature(true) != ASK_OK)
     {
+      DISPLAYLCD("sensor ERROR");
       Serial.println(F("Erreur de demande de lecture du capteur"));
       return;
     }
@@ -394,6 +420,7 @@ void loop()
     onewireWaitingForRead = false;
     if (ReadTemperature(&current_temp) != READ_OK)
     {
+      DISPLAYLCD("reading temp ERR");
       Serial.println(F("Erreur de lecture du capteur"));
       return;
     }
@@ -405,6 +432,6 @@ void loop()
 
     ManageDisplay();
 
-    ManageHeating();
+    //ManageHeating();
   }
 }
