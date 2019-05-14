@@ -63,7 +63,9 @@ unsigned long latestSwitchHeater = 0;
 unsigned long maxduration = 60; // durée de chauffage max (en minutes)
 unsigned long currentmillis;
 float current_temp = 0;
-float target_temp = 0;
+float target_temp = 0.12;
+char buffstr[16], s_temp[8];
+bool blinkheat = false;
 
 char modesdisplay[MODESNB][16] = {
     "choix temp",
@@ -106,17 +108,14 @@ uint8_t _DisplayLCD(const char *message, uint8_t line = 0, uint8_t pos = 0, uint
 #define DISPLAYLCD_3(message, line, pos) _DisplayLCD(message, line, pos, strlen(message), false)
 #define DISPLAYLCD_OVERWRITE(message, line, pos) _DisplayLCD(message, line, pos, strlen(message), true)
 
-
 #define GET_4TH_ARG(arg1, arg2, arg3, arg4, ...) arg4
-#define DISPLAYLCD_MACRO_CHOOSER(...) \
-    GET_4TH_ARG(__VA_ARGS__, DISPLAYLCD_3, \
-                DISPLAYLCD_2, DISPLAYLCD_1, )
+#define DISPLAYLCD_MACRO_CHOOSER(...)    \
+  GET_4TH_ARG(__VA_ARGS__, DISPLAYLCD_3, \
+              DISPLAYLCD_2, DISPLAYLCD_1, )
 
-#define DISPLAYLCD(...) DISPLAYLCD_MACRO_CHOOSER(__VA_ARGS__)(__VA_ARGS__)
-
-
-
-
+#define DISPLAYLCD(...)                 \
+  DISPLAYLCD_MACRO_CHOOSER(__VA_ARGS__) \
+  (__VA_ARGS__)
 
 byte requestTemperature(byte reset_search)
 {
@@ -150,9 +149,6 @@ byte requestTemperature(byte reset_search)
     // Mauvais type de capteur
     return INVALID_SENSOR;
   }
-  //Serial.print(F("DS18B20 addr:"));
-  //Serial.print(onewire_addr,8);
-  //Serial.println();
 
   /* Reset le bus 1-Wire et sélectionne le capteur */
   ds.reset();
@@ -238,11 +234,21 @@ void testButton()
         CurrentMode = RUNNING;
       break;
     case BUTTON_SELECT:
-      if (CurrentMode == RUNNING)
+      switch (CurrentMode)
+      {
+      case RUNNING:
         CurrentIhmState = MEASURING;
-      else
+        break;
+      case SETTEMP:
         CurrentIhmState = ENTERDATA;
-      break;
+        target_temp = floor(current_temp);
+        break;
+      case SETMAXDURATION:
+        CurrentIhmState = ENTERDATA;
+        break;
+      default:
+        break;
+      }
     default:
       return;
     }
@@ -274,7 +280,7 @@ void testButton()
       }
       break;
     case BUTTON_SELECT:
-       switch (CurrentMode)
+      switch (CurrentMode)
       {
       case SETTEMP:
         thermostatActivated = true;
@@ -294,24 +300,36 @@ void testButton()
 
 void ManageHeating()
 {
+  bool sw = false;
   if (thermostatActivated && (currentmillis - latestSwitchHeater) > HEATSTATESWITCH_INTERVAL)
   {
     latestSwitchHeater = currentmillis;
-    if (current_temp < target_temp - 1)
+    if (current_temp < target_temp)
     {
-      heatState = HIGH;
-      DISPLAYLCD("set heat ON", 0, 0);
-      delay(1000);
+      if (heatState == LOW)
+      {
+        heatState = HIGH;
+        strcpy(s_temp, "ON");
+        sw = true;
+      }
     }
     else
     {
-      heatState = LOW;
-      DISPLAYLCD("set heat OFF", 0, 0);
+      if (heatState == HIGH)
+      {
+        heatState = LOW;
+        strcpy(s_temp, "OFF");
+        sw = true;
+      }
+    }
+    if (sw)
+    {
+      digitalWrite(HEATRELAY_PIN, heatState);
+      sprintf(buffstr, "set heat %s", s_temp);
+      lcd.clear();
+      DISPLAYLCD(buffstr, 0, 0);
       delay(1000);
     }
-    digitalWrite(HEATRELAY_PIN, heatState);
-    DISPLAYLCD("OK",1, 0);
-    delay(10000);
   }
 }
 
@@ -320,21 +338,21 @@ void ManageDisplay()
   switch (CurrentIhmState)
   {
   case MEASURING:
-    char s_temp[5];
-    dtostrf(current_temp, 5, 2, s_temp);
     DISPLAYLCD("Temp:", 0, 0);
     if (thermostatActivated)
     {
-      DISPLAYLCD("<", 0, 10);
-      // lcd.setCursor(10, 0);
-      // lcd.print("<");
-      // lcd.setCursor(11, 0);
-      char s_temptarget[2];
-      dtostrf(target_temp, 2, 0, s_temptarget);
-      // lcd.print(s_temptarget);
-      DISPLAYLCD(s_temptarget, 0, 11);
+      dtostrf(target_temp, 6, 0, s_temp);
+      sprintf(buffstr, "<%sc", s_temp);
+      DISPLAYLCD(buffstr, 0, 8);
     }
-    DISPLAYLCD(s_temp, 1, 0);
+    dtostrf(current_temp, 6, 2, s_temp);
+    sprintf(buffstr, "%sc", s_temp);
+    DISPLAYLCD(buffstr, 1, 0);
+    blinkheat = !blinkheat;
+    if (heatState == HIGH && blinkheat)
+    {
+      DISPLAYLCD("HEAT", 1, 12);
+    }
     break;
   case MODESELECTION:
     DISPLAYLCD("Mode:", 0, 0);
@@ -347,14 +365,15 @@ void ManageDisplay()
       DISPLAYLCD("reglage Temp:", 0, 0);
       if (target_temp == 0)
         target_temp = current_temp;
-      dtostrf(target_temp, 5, 2, s_temp);
-      DISPLAYLCD(s_temp, 1, 0);
+      dtostrf(target_temp, 5, 0, s_temp);
+      sprintf(buffstr, "%sc", s_temp);
+      DISPLAYLCD(buffstr, 1, 0);
       break;
     case SETMAXDURATION:
       DISPLAYLCD("duree minutes", 0, 0);
-      char s_maxdur[4];
-      dtostrf(maxduration, 4, 0, s_maxdur);
-      DISPLAYLCD(s_maxdur, 1, 0);
+      dtostrf(maxduration, 4, 0, s_temp);
+      sprintf(buffstr, "%smin", s_temp);
+      DISPLAYLCD(buffstr, 1, 0);
       break;
     default:
       return;
@@ -371,18 +390,16 @@ void setup()
   Serial.begin(115200);
   lcd.begin(16, 2);
   DISPLAYLCD("Bienvenue");
-  delay(500);
+  delay(700);
   DISPLAYLCD("sur", 1);
   delay(500);
-  DISPLAYLCD("mon", 0, 0);
-  delay(100);
-  DISPLAYLCD_OVERWRITE("mon", 0, 3);
-  delay(100);
-  DISPLAYLCD_OVERWRITE("mon", 0, 7);
-  delay(100);
-  DISPLAYLCD_OVERWRITE("mon", 0, 10);
-  delay(100);
-  DISPLAYLCD_OVERWRITE("THERMOSTAT", 1, 2);
+  for (i = 0; i++; i < 10)
+  {
+    DISPLAYLCD_OVERWRITE("mon", 0, i);
+    delay(100);
+  }
+  DISPLAYLCD_OVERWRITE("Thermostat", 1, 2);
+  delay(1000);
   lasttestbutton = millis();
   pinMode(HEATRELAY_PIN, OUTPUT);
 }
@@ -432,6 +449,6 @@ void loop()
 
     ManageDisplay();
 
-    //ManageHeating();
+    ManageHeating();
   }
 }
